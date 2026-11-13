@@ -132,6 +132,9 @@ def main():
     rules = Rules(min_ev=cfg("MIN_EV", Rules.min_ev), max_odds=cfg("MAX_ODDS", Rules.max_odds),
                   blend=cfg("BLEND", Rules.blend))
     feed = Feed(args.mock)
+    if not args.mock and announce.channel_configured():
+        ch = announce.channel_info()  # saves the channel's permanent id (renaming won't break posting)
+        print(f"  channel: {ch.get('title', '')} @{ch.get('username', '')}")
     book = ledger.load(ledger_path)
     alerts = []
 

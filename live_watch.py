@@ -80,7 +80,7 @@ class Watcher:
         if self.dry:
             return True
         self.save_state()
-        sh("git", "add", STATE, self.ledger_path)
+        sh("git", "add", "state")
         if sh("git", "diff", "--cached", "--quiet").returncode != 0:
             sh("git", "commit", "-q", "-m", message)
         for _ in range(5):
@@ -312,6 +312,8 @@ def main():
     if args.replay:
         replay(args.replay)
         return
+    if announce.channel_configured():
+        announce.channel_info()
     Watcher(dry=cfg("POST_MODE", "dry") != "live").run()
 
 

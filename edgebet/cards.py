@@ -59,7 +59,12 @@ def _header(im, d, right_text):
     except Exception:  # noqa: BLE001
         pass
     d.text((210, 72), "ODDS BROTHERS", font=_f(52, 900), fill=WHITE)
-    d.text((212, 138), "t.me/BITPICKS5STARTS", font=_f(30, 600), fill=GREY)
+    try:
+        from .announce import channel_link
+        link = channel_link() or "Telegram"
+    except Exception:  # noqa: BLE001
+        link = "Telegram"
+    d.text((212, 138), link, font=_f(30, 600), fill=GREY)
     f = _f(30, 700)
     d.text((W - 60 - d.textlength(right_text, font=f), 92), right_text, font=f, fill=GREY)
 

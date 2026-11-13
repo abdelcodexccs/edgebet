@@ -138,10 +138,7 @@ def channel_message(settled: list[dict], pick: dict | None, rec: dict, why=None,
 def post_to_channel(text_html: str) -> str:
     """Post to your Telegram channel (the bot must be an admin of it). Free.
     Returns the message id."""
-    token = os.environ["TELEGRAM_BOT_TOKEN"].strip().strip('"').strip("'")
-    chat = os.environ["TELEGRAM_CHANNEL_ID"].strip().strip('"').strip("'")
-    token = token.split("=", 1)[1].strip() if token.upper().startswith("TELEGRAM_BOT_TOKEN=") else token
-    chat = chat.split("=", 1)[1].strip() if chat.upper().startswith("TELEGRAM_CHANNEL_ID=") else chat
+    token, chat = _creds()
     data = urllib.parse.urlencode({"chat_id": chat, "text": text_html, "parse_mode": "HTML",
                                    "disable_web_page_preview": "true"}).encode()
     with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data, timeout=20) as r:
@@ -204,12 +201,55 @@ def send(text_html: str, to: str = "channel", png: bytes | None = None) -> None:
             urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data, timeout=20)
 
 
+CHANNEL_STATE = os.path.join("state", "channel.json")
+_channel_cache: dict = {}
+
+
+def channel_info() -> dict:
+    """The channel's permanent number id and its current @username.
+
+    The number never changes, so renaming the channel doesn't break the bot: the id is
+    saved in state/channel.json the first time, and the username is refreshed every run."""
+    if _channel_cache:
+        return _channel_cache
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip().strip('"').strip("'")
+    token = token.split("=", 1)[1].strip() if token.upper().startswith("TELEGRAM_BOT_TOKEN=") else token
+    chat = os.environ.get("TELEGRAM_CHANNEL_ID", "").strip().strip('"').strip("'")
+    chat = chat.split("=", 1)[1].strip() if chat.upper().startswith("TELEGRAM_CHANNEL_ID=") else chat
+    saved = {}
+    if os.path.exists(CHANNEL_STATE):
+        try:
+            saved = json.load(open(CHANNEL_STATE))
+        except ValueError:
+            saved = {}
+    info = {"id": saved.get("id") or chat, "username": saved.get("username", "")}
+    for who in [x for x in (saved.get("id"), chat) if x]:
+        try:
+            q = urllib.parse.urlencode({"chat_id": who})
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/getChat?{q}", timeout=20) as r:
+                res = json.loads(r.read().decode())["result"]
+            info = {"id": res["id"], "username": res.get("username", ""), "title": res.get("title", "")}
+            if info != {k: saved.get(k) for k in info}:
+                os.makedirs("state", exist_ok=True)
+                json.dump(info, open(CHANNEL_STATE, "w"), ensure_ascii=False)
+            break
+        except Exception:  # noqa: BLE001  (offline, or the old @username no longer exists)
+            continue
+    _channel_cache.update(info)
+    return _channel_cache
+
+
+def channel_link() -> str:
+    u = os.environ.get("CHANNEL_LINK") or (channel_info().get("username") if channel_configured() else "")
+    if not u and os.path.exists(CHANNEL_STATE):
+        u = json.load(open(CHANNEL_STATE)).get("username", "")
+    return u if "/" in str(u) else f"t.me/{u}" if u else ""
+
+
 def _creds():
     token = os.environ["TELEGRAM_BOT_TOKEN"].strip().strip('"').strip("'")
-    chat = os.environ["TELEGRAM_CHANNEL_ID"].strip().strip('"').strip("'")
     token = token.split("=", 1)[1].strip() if token.upper().startswith("TELEGRAM_BOT_TOKEN=") else token
-    chat = chat.split("=", 1)[1].strip() if chat.upper().startswith("TELEGRAM_CHANNEL_ID=") else chat
-    return token, chat
+    return token, str(channel_info()["id"])
 
 
 def _visible_len(text_html: str) -> int:
