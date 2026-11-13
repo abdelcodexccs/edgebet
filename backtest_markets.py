@@ -143,6 +143,20 @@ def strategies(all_bets: pd.DataFrame):
         x = x.assign(week=pd.to_datetime(x["date"]).dt.to_period("W"))
         v = x.sort_values("conf", ascending=False).groupby("week").head(1)
         rows.append((f"{market} VIP: most likely bet of the week, odds ≥ {lo}", v))
+    # daily "pick of the day": the most likely bet of the day where the model agrees with the market
+    for mk, lo, conf in ((("1X2",), 1.2, 0.0), (("DC",), 1.2, 0.0), (("1X2", "DC", "DNB"), 1.2, 0.0),
+                         (("1X2", "DC", "DNB"), 1.3, 0.0), (("1X2", "DC", "DNB"), 1.2, 0.75),
+                         (("DC",), 1.3, 0.0), (("1X2", "DC", "DNB"), 1.4, 0.0)):
+        x = all_bets[all_bets["market"].isin(mk) & (all_bets["odds"] >= lo) & (all_bets["ev"] >= -0.02)
+                     & (all_bets["conf"] >= conf)]
+        x = x.assign(day=pd.to_datetime(x["date"]).dt.date)
+        v = x.sort_values("conf", ascending=False).groupby("day").head(1)
+        rows.append((f"DAILY {'+'.join(mk)}: most likely bet of the day, odds ≥ {lo}"
+                     + (f", ≥{conf:.0%} likely" if conf else ""), v))
+    x = all_bets[all_bets["market"].isin(("1X2", "DC", "DNB")) & (all_bets["odds"] >= 1.2) & (all_bets["ev"] >= -0.02)]
+    x = x.assign(week=pd.to_datetime(x["date"]).dt.to_period("W"))
+    rows.append(("WEEKLY 1X2+DC+DNB VIP: most likely bet of the week",
+                 x.sort_values("conf", ascending=False).groupby("week").head(1)))
     return rows
 
 
