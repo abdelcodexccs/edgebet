@@ -75,7 +75,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if grep -q ",pending," state/ledger.csv; then
+          if [ "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .private)" = "true" ]; then
+            echo "::warning::repo is private: live watcher not started (it needs the free minutes of a public repo)"
+          elif grep -q ",pending," state/ledger.csv; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/workflows/live.yml/dispatches" -f ref="${GITHUB_REF_NAME}" && echo "::notice::live watcher started"
           else
             echo "no pending picks, live watcher not needed"
