@@ -1,0 +1,54 @@
+name: Channel connection test
+on:
+  workflow_dispatch:
+    inputs:
+      delete_after_minutes:
+        description: "delete the test message after this many minutes (0 = keep it)"
+        default: "10"
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Read the channel, post a test message
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          DELETE_AFTER: ${{ github.event.inputs.delete_after_minutes }}
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.parse, urllib.request
+          from edgebet import announce
+          info = announce.channel_info()
+          user = info.get("username", "")
+          print(f"::notice::Channel: {info.get('title')} · @{user} · id found: {bool(info.get('id'))}")
+          mins = int(os.environ.get("DELETE_AFTER") or 0)
+          mid = announce.post_to_channel(
+              "✅ <b>Connection test</b>\n"
+              f"The ODDS BROTHERS bot is connected to this channel (t.me/{user}).\n"
+              + (f"<i>This test message deletes itself in {mins} minutes.</i>" if mins else ""))
+          print(f"::notice::Test message posted (message {mid})")
+          if mins:
+              time.sleep(mins * 60)
+              token, chat = announce._creds()
+              data = urllib.parse.urlencode({"chat_id": chat, "message_id": mid}).encode()
+              ok = json.load(urllib.request.urlopen(f"https://api.telegram.org/bot{token}/deleteMessage", data=data, timeout=20)).get("ok")
+              print(f"::notice::Test message deleted: {ok}")
+          PY
+      - name: Save the new channel name
+        if: always()
+        run: |
+          git config user.name "edgebet-bot"
+          git config user.email "edgebet-bot@users.noreply.github.com"
+          git add state/channel.json
+          git diff --cached --quiet || git commit -m "channel name updated"
+          git pull --rebase --autostash -q || true
+          git push
