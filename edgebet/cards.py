@@ -49,16 +49,23 @@ def _pill(d, x, y, text, font, bg, fg, padx=28, pady=12):
 
 def _header(im, d, right_text):
     try:
-        b = Image.open(os.path.join(HERE, "brothers.jpg")).convert("RGB")
-        s = min(b.size)
-        b = b.crop(((b.size[0] - s) // 2, 0, (b.size[0] + s) // 2, s)).resize((120, 120))
-        mask = Image.new("L", (120, 120), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, 119, 119), fill=255)
-        d.ellipse((56, 56, 184, 184), fill=GREEN)
-        im.paste(b, (60, 60), mask)
+        logo = os.path.join(HERE, "logo.png")
+        if os.path.exists(logo):  # the channel logo (round badge)
+            b = Image.open(logo).convert("RGBA").resize((136, 136), Image.LANCZOS)
+            mask = Image.new("L", (136, 136), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, 135, 135), fill=255)
+            im.paste(b, (52, 52), mask)
+        else:
+            b = Image.open(os.path.join(HERE, "brothers.jpg")).convert("RGB")
+            s = min(b.size)
+            b = b.crop(((b.size[0] - s) // 2, 0, (b.size[0] + s) // 2, s)).resize((120, 120))
+            mask = Image.new("L", (120, 120), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, 119, 119), fill=255)
+            d.ellipse((56, 56, 184, 184), fill=GREEN)
+            im.paste(b, (60, 60), mask)
     except Exception:  # noqa: BLE001
         pass
-    d.text((210, 72), "ODDS BROTHERS", font=_f(52, 900), fill=WHITE)
+    d.text((210, 72), "ODDS BROS TIPS", font=_f(52, 900), fill=WHITE)
     try:
         from .announce import channel_link
         link = channel_link() or "Telegram"

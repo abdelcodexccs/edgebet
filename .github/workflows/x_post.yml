@@ -1,0 +1,42 @@
+name: Post pending picks to X
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = really post, dry = show what would be posted"
+        default: live
+        type: choice
+        options: [live, dry]
+permissions:
+  contents: write
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Post
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          POST_MODE: ${{ github.event.inputs.mode || 'live' }}
+          TIMEZONE: Africa/Casablanca
+        run: python x_post_pending.py
+      - name: Save the post ids
+        if: github.event.inputs.mode != 'dry'
+        run: |
+          git config user.name "edgebet-bot"
+          git config user.email "edgebet-bot@users.noreply.github.com"
+          git add state
+          git diff --cached --quiet || git commit -m "X post ids"
+          git pull --rebase --autostash -q || true
+          git push

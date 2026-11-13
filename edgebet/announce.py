@@ -23,10 +23,12 @@ def result_line(r: dict) -> str:
 
 
 def pick_lines(p: dict) -> list[str]:
+    kind = "💎 Value pick" if p.get("tier", "value") == "value" else "📌 Pick of the day"
+    when = f' · {p["kickoff_local"]}' if p.get("kickoff_local") else ""
     return [
-        f'Today: {p["home"]} v {p["away"]}',
-        f'Pick: {markets.label(p["outcome"], p["home"], p["away"])} @ {p["odds"]:.2f}',
-        f'Market {_pct(p["implied"])} · Model {_pct(p["final_p"])} · EV {p["ev"] * 100:+.1f}%',
+        f'⚽ {p["home"]} v {p["away"]}{when}',
+        f'{kind}: {markets.label(p["outcome"], p["home"], p["away"])} @ {p["odds"]:.2f}',
+        f'Bookmaker {_pct(p["implied"])} · Our model {_pct(p["final_p"])}',
     ]
 
 

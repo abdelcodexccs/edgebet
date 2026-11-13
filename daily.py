@@ -410,6 +410,8 @@ def main():
                 except Exception as e:  # noqa: BLE001
                     alerts.append(f"Telegram channel post failed: {e}")
         if "x" in targets:
+            if pk:
+                pk["kickoff_local"] = local_time(pk["kickoff"])
             text = announce.compose(done, pk, rec, pk["hashtag"] if pk else "")
             print("\n----- TWEET -----\n" + text + f"\n----- ({len(text)} chars) -----")
             if live_mode and announce.x_configured():
