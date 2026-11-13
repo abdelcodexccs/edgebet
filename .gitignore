@@ -1,0 +1,9 @@
+.env
+__pycache__/
+results/
+tests/
+_to_delete/
+*.bat
+data_hist/
+data_tennis/
+results/

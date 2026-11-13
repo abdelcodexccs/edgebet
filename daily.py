@@ -1,0 +1,328 @@
+"""The whole daily cycle in one command.
+
+  1. refresh this season's results (football-data.co.uk)
+  2. settle finished picks (ESPN free scores; The Odds API as fallback)
+  3. fit the model and price the next ~30 hours of fixtures
+  4. choose the best value bet(s) under the backtested rules
+  5. post results + today's pick + reasons + running record to your Telegram
+     channel (free) and/or X (dry run unless POST_MODE=live)
+  6. send yourself a private Telegram alert with the suggested stake
+
+Usage:
+    python daily.py                 # uses settings in .env
+    python daily.py --mock tests/mock --now 2018-05-12T09:00:00Z   # offline test
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+from edgebet import announce, espn, ledger, live, reasons, ucl
+from edgebet.data import load_league
+from edgebet.model import DixonColes
+from edgebet.strategy import OUTCOMES, Rules, pick, probabilities
+
+
+def load_env(path=".env"):
+    if not os.path.exists(path):
+        return
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            v = v.split(" #", 1)[0]  # allow trailing comments
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def cfg(key, default):
+    v = os.environ.get(key, default)
+    return type(default)(v) if not isinstance(default, bool) else str(v).lower() in ("1", "true", "yes")
+
+
+def local_time(iso: str) -> str:
+    """Kickoff in your time zone, e.g. 'Sat 22 Apr, 15:00'."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    try:
+        t = t.astimezone(ZoneInfo(cfg("TIMEZONE", "Africa/Casablanca")))
+    except Exception:  # noqa: BLE001
+        pass
+    return t.strftime("%a %d %b, %H:%M")
+
+
+def refresh_season(league: str, data_dir: str, now: datetime):
+    y = now.year if now.month >= 7 else now.year - 1
+    if league == "UCL":
+        season = f"{y}-{(y + 1) % 100:02d}"
+        dest = os.path.join(data_dir, "UCL", f"cl-{season}.txt")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        try:
+            urllib.request.urlretrieve(
+                f"https://raw.githubusercontent.com/openfootball/champions-league/master/{season}/cl.txt", dest)
+            print(f"  refreshed {dest}")
+        except Exception:  # noqa: BLE001
+            pass  # not published yet; the bot collects this season's results itself
+        for lg in ucl.LINK_LEAGUES:
+            if lg not in refreshed:
+                refresh_season(lg, data_dir, now)
+        return
+    if league in refreshed:
+        return
+    refreshed.add(league)
+    code = f"{y % 100:02d}{(y + 1) % 100:02d}"
+    dest = os.path.join(data_dir, league, f"{league}-{y}.csv")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    try:
+        urllib.request.urlretrieve(f"https://www.football-data.co.uk/mmz4281/{code}/{league}.csv", dest)
+        print(f"  refreshed {dest}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  could not refresh {league} {y}: {e} (using existing files)")
+
+
+refreshed: set = set()
+
+
+class Feed:
+    """Real API calls, or JSON files from --mock for offline testing."""
+
+    def __init__(self, mock_dir=None):
+        self.mock = mock_dir
+        self._scores = {}
+
+    def _mock(self, kind, sport):
+        p = os.path.join(self.mock, f"{kind}_{sport}.json")
+        return json.load(open(p)) if os.path.exists(p) else []
+
+    def odds(self, sport):
+        return self._mock("odds", sport) if self.mock else live.fetch_odds(sport)
+
+    def scores(self, sport):
+        if sport not in self._scores:
+            self._scores[sport] = self._mock("scores", sport) if self.mock else live.fetch_scores(sport)
+        return self._scores[sport]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--mock", help="folder with odds_<sport>.json / scores_<sport>.json")
+    ap.add_argument("--now", help="pretend current UTC time (testing)")
+    ap.add_argument("--env", default=".env")
+    args = ap.parse_args()
+    load_env(args.env)
+
+    now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime.now(timezone.utc)
+    leagues = [x.strip() for x in cfg("LEAGUES", "E0").split(",") if x.strip()]
+    data_dir = cfg("HISTORY_DIR", "data")
+    ledger_path = cfg("LEDGER", "state/ledger.csv")
+    live_mode = cfg("POST_MODE", "dry") == "live"
+    bankroll = cfg("BANKROLL", 1000.0)
+    rules = Rules(min_ev=cfg("MIN_EV", Rules.min_ev), max_odds=cfg("MAX_ODDS", Rules.max_odds),
+                  blend=cfg("BLEND", Rules.blend))
+    feed = Feed(args.mock)
+    book = ledger.load(ledger_path)
+    alerts = []
+
+    # 1-2. refresh results and settle pending picks
+    settled = []
+    use_espn = not args.mock and cfg("USE_ESPN", True)
+    for lg in leagues:
+        if cfg("REFRESH_DATA", True) and not args.mock:
+            refresh_season(lg, data_dir, now)
+        sport = live.LEAGUES[lg][0]
+        pend = book[(book["status"] == "pending") & (book["sport_key"] == sport)]
+        if not len(pend):
+            continue
+        if use_espn:  # free: the live watcher normally settles these already
+            try:
+                evs = espn.between(lg, now - timedelta(days=4), now)
+                for row in pend.to_dict("records"):
+                    e = espn.find(evs, row["home"], row["away"], row["kickoff"])
+                    if e and e["completed"] and e["hs"] is not None:
+                        r = ledger.settle(book, row["event_id"], *espn.ninety_minute_score(e))
+                        if r:
+                            settled.append(r)
+            except Exception as e:  # noqa: BLE001
+                print(f"  espn results {lg} failed: {e}")
+        pend = book[(book["status"] == "pending") & (book["sport_key"] == sport)]
+        finished = pd.to_datetime(pend["kickoff"], utc=True) < pd.Timestamp(now) - pd.Timedelta(hours=2, minutes=30)
+        if finished.any():  # fallback: The Odds API (2 credits)
+            for ev in feed.scores(sport):
+                fs = live.final_score(ev)
+                if fs and None not in fs:
+                    r = ledger.settle(book, ev["id"], *fs)
+                    if r:
+                        settled.append(r)
+    if "UCL" in leagues and now.weekday() in (2, 3, 4) and use_espn:  # Wed-Fri: collect Tue-Thu results
+        try:
+            evs = [e for e in espn.between("UCL", now - timedelta(days=3), now)
+                   if e["completed"] and e["hs"] is not None]
+            as_api = [{"id": "espn-" + e["id"], "completed": True, "commence_time": e["kickoff"],
+                       "home_team": e["home"], "away_team": e["away"],
+                       "scores": [{"name": e["home"], "score": espn.ninety_minute_score(e)[0]},
+                                  {"name": e["away"], "score": espn.ninety_minute_score(e)[1]}]} for e in evs]
+            n = ucl.save_live_results(as_api, os.path.join(data_dir, "UCL", "live_results.csv"))
+            if n:
+                print(f"  saved {n} new Champions League results")
+        except Exception as e:  # noqa: BLE001
+            print(f"  espn UCL results failed: {e}")
+    if settled:
+        ledger.save(book, ledger_path)
+
+    # 3-4. price upcoming fixtures (skipped on the evening results-only run)
+    candidates, leans, scan = [], [], []
+    today_str = now.date().isoformat()
+    posted_today = int(book["posted_at"].astype(str).str.startswith(today_str).sum()) if len(book) else 0
+    quota_full = posted_today >= cfg("MAX_PICKS_PER_DAY", 1)
+    if quota_full and not cfg("RESULTS_ONLY", False):
+        print(f"Today's {posted_today} pick(s) already posted: no pricing, no credits spent")
+    look = cfg("LOOKAHEAD_HOURS", 30)
+    for lg in ([] if cfg("RESULTS_ONLY", False) or quota_full else leagues):
+        sport, name, tag = live.LEAGUES[lg]
+        today = pd.Timestamp(now.replace(tzinfo=None))
+        season_start = pd.Timestamp(now.year if now.month >= 7 else now.year - 1, 7, 1)
+        if use_espn and lg in espn.SLUGS:  # free fixture check before spending an Odds API credit
+            n_fix = espn.fixtures_between(lg, now, now + timedelta(hours=look))
+            if n_fix == 0:
+                print(f"  {name}: no games in the next {look}h (ESPN), odds not fetched")
+                continue
+        events = live.upcoming(feed.odds(sport), look, now)
+        if not events:
+            continue
+        if lg == "UCL":
+            # one model across all linked leagues + every Champions League result
+            hist, mapper, _ = ucl.load_combined(data_dir, since=today - pd.Timedelta(days=3 * 365), until=today)
+            matcher = mapper
+            matcher.match = mapper.map
+            min_n = cfg("UCL_MIN_MATCHES", 25)
+        else:
+            hist = load_league(os.path.join(data_dir, lg))
+            hist = hist[(hist["Date"] < today) & (hist["Date"] >= today - pd.Timedelta(days=3 * 365))]
+            matcher = None
+            min_n = rules.min_matches
+        model = DixonColes().fit(hist, as_of=pd.Timestamp(now.date()))
+        if matcher is None:
+            matcher = live.TeamMatcher(model.teams)
+        for ev in events:
+            if (book["event_id"] == ev["id"]).any():
+                continue  # already posted
+            e = live.parse_event(ev, cfg("BET_BOOK", "best"))
+            if e is None:
+                scan.append(f"{ev['home_team']} v {ev['away_team']}: no 1X2 odds")
+                continue
+            h, a = matcher.match(e["home"]), matcher.match(e["away"])
+            if not h or not a:
+                if lg == "UCL":  # clubs from leagues the model doesn't cover
+                    scan.append(f"{e['home']} v {e['away']}: team not rated (league not covered)")
+                else:
+                    alerts.append(f"Unmatched team: {e['home']} / {e['away']} -> add to team_aliases.csv")
+                continue
+            if not (model.knows(h, min_n) and model.knows(a, min_n)):
+                scan.append(f"{e['home']} v {e['away']}: not enough history for a team")
+                continue
+            if e["sharp"] is None and cfg("REQUIRE_SHARP", True):
+                scan.append(f"{e['home']} v {e['away']}: no Pinnacle price ({e['n_books']} books)")
+                continue
+            mp = model.predict(h, a)
+            p = probabilities(mp, e["sharp"], rules.blend if e["sharp"] else 1.0)
+            b = pick(p, e["odds"], rules)
+            evs = [p[k] * e["odds"][k] - 1 for k in range(3)]
+            scan.append(f"[{lg}] {e['home']} v {e['away']}: ours H/D/A " + "/".join(f"{x:.0%}" for x in p)
+                        + " | best odds " + "/".join(f"{x:.2f}" for x in e["odds"])
+                        + " | EV " + "/".join(f"{x:+.1%}" for x in evs) + (" <- PICK" if b else ""))
+            # best playable side even below the value bar (for "pick of the day" mode)
+            lean = b or pick(p, e["odds"], Rules(**{**rules.__dict__, "min_ev": -1.0}))
+            if lean and not b:
+                lean["stake_frac"] = cfg("LEAN_STAKE", 0.005)  # small flat stake, no edge to size on
+            if lean:
+                team = {"home": e["home"], "away": e["away"], "draw": "Draw"}[lean["outcome"]]
+                why = reasons.build(hist, model, h, a, lean["outcome"], {h: e["home"], a: e["away"]},
+                                    season_start) if lean["outcome"] != "draw" else []
+                row = {**e, **lean, "league": lg, "league_name": name, "sport_key": sport,
+                       "hashtag": tag, "team": team, "model_p": mp[lean["outcome"]],
+                       "final_p": lean["p"], "book": e["book_names"][lean["k"]], "why": why,
+                       "tier": "value" if b else "lean"}
+                (candidates if b else leans).append(row)
+
+    print(f"\nGames checked in the next {cfg('LOOKAHEAD_HOURS', 30)}h: {len(scan)}")
+    for line in scan:
+        print("  " + line)
+    print(f"Rule: bet only if EV >= {rules.min_ev:+.0%}, odds {rules.min_odds}-{rules.max_odds}, no draws\n")
+    candidates.sort(key=lambda c: c["ev"], reverse=True)
+    # a second run on the same day (backup schedule) only fills what's left of today's quota
+    left = max(0, cfg("MAX_PICKS_PER_DAY", 1) - posted_today)
+    picks = candidates[:left]
+    # Daily mode: no value bet today -> still post the best game, clearly labelled
+    if not picks and leans and cfg("DAILY_PICK", False) and posted_today == 0:
+        leans.sort(key=lambda c: c["ev"], reverse=True)
+        picks = leans[:1]
+        print(f"No value bet, daily mode: posting best game as Pick of the day "
+              f"({picks[0]['team']} @ {picks[0]['odds']:.2f}, edge {picks[0]['ev']:+.1%})")
+
+    # 5-6. compose, publish, alert
+    targets = [t.strip() for t in cfg("PUBLISH_TO", "telegram").split(",") if t.strip()]
+    footer = cfg("CHANNEL_FOOTER", "18+ · No bet is certain · Only stake what you can afford to lose")
+    rec = ledger.record(book)
+    posts = []  # (ledger row or None, pick or None, settled list)
+    if picks:
+        for i, pk in enumerate(picks):
+            book = ledger.add(book, {
+                "posted_at": now.isoformat(), "event_id": pk["event_id"], "league": pk["league"],
+                "sport_key": pk["sport_key"], "kickoff": pk["kickoff"], "home": pk["home"],
+                "away": pk["away"], "pick": pk["outcome"], "team": pk["team"], "odds": pk["odds"],
+                "book": pk["book"], "implied": round(pk["implied"], 4), "model_p": round(pk["model_p"], 4),
+                "final_p": round(pk["final_p"], 4), "ev": round(pk["ev"], 4),
+                "stake_pct": round(pk["stake_frac"], 4), "tier": pk.get("tier", "value")})
+            posts.append((len(book) - 1, pk, settled if i == 0 else []))
+    elif settled and cfg("POST_RESULTS_ONLY", True):
+        posts.append((None, None, settled))
+        rec = ledger.record(book)
+
+    for row_i, pk, done in posts:
+        published = []
+        if "telegram" in targets:
+            msg = announce.channel_message(
+                done, pk, rec, pk["why"] if pk else None,
+                pk["league_name"] if pk else "", local_time(pk["kickoff"]) if pk else "", footer)
+            print("\n----- TELEGRAM CHANNEL -----\n" + msg + "\n-----")
+            if live_mode and announce.channel_configured():
+                try:
+                    mid = announce.post_to_channel(msg)
+                    published.append("Telegram")
+                    if row_i is not None:
+                        book.at[row_i, "message_id"] = mid
+                except Exception as e:  # noqa: BLE001
+                    alerts.append(f"Telegram channel post failed: {e}")
+        if "x" in targets:
+            text = announce.compose(done, pk, rec, pk["hashtag"] if pk else "")
+            print("\n----- TWEET -----\n" + text + f"\n----- ({len(text)} chars) -----")
+            if live_mode and announce.x_configured():
+                try:
+                    tid = announce.post_to_x(text)
+                    published.append("X")
+                    if row_i is not None:
+                        book.at[row_i, "tweet_id"] = tid
+                except Exception as e:  # noqa: BLE001
+                    alerts.append(f"X post failed: {e}")
+        if pk:
+            stake = bankroll * pk["stake_frac"]
+            announce.telegram(f"{'POSTED to ' + ', '.join(published) if published else 'DRAFT (not posted)'}: "
+                              f"{pk['team']} @ {pk['odds']:.2f} ({pk['home']} v {pk['away']})\n"
+                              f"Your stake: {stake:.0f} ({pk['stake_frac']:.1%} of {bankroll:.0f}) "
+                              f"at {pk['book']}. Kickoff {local_time(pk['kickoff'])}")
+    if not posts:
+        print("No value bet today and nothing to settle. Nothing posted.")
+    ledger.save(book, ledger_path)
+    for a in alerts:
+        print("ALERT:", a)
+    if alerts:
+        announce.telegram("EdgeBet alerts:\n" + "\n".join(alerts))
+    print("record:", ledger.record(book))
+
+
+if __name__ == "__main__":
+    main()

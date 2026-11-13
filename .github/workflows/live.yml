@@ -1,0 +1,53 @@
+name: EdgeBet live (goals + full-time results)
+
+on:
+  workflow_dispatch:        # started by the daily run when picks are pending, or by hand
+    inputs:
+      mode:
+        description: "live = really post, dry = test only"
+        default: live
+        type: choice
+        options: [live, dry]
+      replay:
+        description: "test only: a past date YYYYMMDD to rebuild that day's posts (nothing posted)"
+        default: ""
+        type: string
+
+permissions:
+  contents: write           # saves results to state/ledger.csv
+  actions: write            # lets the watcher start a fresh copy of itself after ~5.5 hours
+
+concurrency:
+  group: edgebet-live       # only one watcher at a time; a second request waits its turn
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Watch pending picks
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          POST_MODE: ${{ github.event.inputs.mode || 'live' }}
+          GOAL_ALERTS_TO: ${{ vars.GOAL_ALERTS_TO || 'channel' }}
+          RESULTS_TO: ${{ vars.RESULTS_TO || 'channel' }}
+          LIVE_MAX_WAIT_HOURS: ${{ vars.LIVE_MAX_WAIT_HOURS || '30' }}
+          TIMEZONE: Africa/Casablanca
+        run: |
+          git config user.name "edgebet-bot"
+          git config user.email "edgebet-bot@users.noreply.github.com"
+          if [ -n "${{ github.event.inputs.replay }}" ]; then
+            python live_watch.py --replay "${{ github.event.inputs.replay }}"
+          else
+            python -u live_watch.py
+          fi
