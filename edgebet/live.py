@@ -106,6 +106,15 @@ def fetch_odds(sport: str, regions: str | None = None) -> list:
     return _get(sport, "odds", {"regions": regions, "markets": "h2h", "oddsFormat": "decimal"})
 
 
+def fetch_sports() -> list:
+    """Every competition The Odds API covers right now. Free: costs no credits."""
+    key = (os.environ.get("ODDS_API_KEY") or "").strip().strip('"').strip("'")
+    key = key.split("=", 1)[1].strip() if key.upper().startswith("ODDS_API_KEY=") else key
+    url = "https://api.the-odds-api.com/v4/sports?" + urllib.parse.urlencode({"apiKey": key})
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return json.loads(r.read().decode())
+
+
 def fetch_scores(sport: str, days_from: int = 3) -> list:
     return _get(sport, "scores", {"daysFrom": days_from})
 

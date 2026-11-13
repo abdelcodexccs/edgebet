@@ -56,6 +56,9 @@ class DixonColes:
         y = df["FTAG"].to_numpy()
         days = (as_of - df["Date"]).dt.days.to_numpy()
         w = np.exp(-self.xi * days)
+        if "Weight" in df:  # e.g. friendlies count less than competitive games
+            w = w * df["Weight"].to_numpy(float)
+        hm = 1.0 - df["Neutral"].to_numpy(float) if "Neutral" in df else np.ones(len(df))  # no home edge on neutral ground
         const = gammaln(x + 1) + gammaln(y + 1)
 
         m00 = (x == 0) & (y == 0)
@@ -68,7 +71,7 @@ class DixonColes:
         def nll(p):
             """Weighted negative log-likelihood (per match) and its exact gradient."""
             att, dfn, home, rho = p[:n], p[n:2 * n], p[2 * n], p[2 * n + 1]
-            lam = np.exp(np.clip(home + att[h] + dfn[a], -6, 4))
+            lam = np.exp(np.clip(home * hm + att[h] + dfn[a], -6, 4))
             mu = np.exp(np.clip(att[a] + dfn[h], -6, 4))
             tau = _tau(x, y, lam, mu, rho)
             ll = x * np.log(lam) - lam + y * np.log(mu) - mu - const + np.log(tau)
@@ -84,7 +87,7 @@ class DixonColes:
             gm = w * (y - mu + mu * dm / tau)     # d ll / d log(mu)
             g_att = np.bincount(h, gl, n) + np.bincount(a, gm, n)
             g_def = np.bincount(a, gl, n) + np.bincount(h, gm, n)
-            grad = -np.concatenate([g_att, g_def, [gl.sum()], [(w * dr / tau).sum()]]) / W
+            grad = -np.concatenate([g_att, g_def, [(gl * hm).sum()], [(w * dr / tau).sum()]]) / W
             grad[:n] += 20.0 * att.sum() + 2 * self.l2 * att
             grad[n:2 * n] += 2 * self.l2 * dfn
             return -(w * ll).sum() / W + pen, grad
@@ -105,14 +108,14 @@ class DixonColes:
         self.n_matches = counts.to_dict()
         return self
 
-    def expected_goals(self, home: str, away: str) -> tuple[float, float]:
+    def expected_goals(self, home: str, away: str, neutral: bool = False) -> tuple[float, float]:
         i, j = self.teams.index(home), self.teams.index(away)
-        lam = np.exp(self.home_adv + self.attack[i] + self.defence[j])
+        lam = np.exp((0.0 if neutral else self.home_adv) + self.attack[i] + self.defence[j])
         mu = np.exp(self.attack[j] + self.defence[i])
         return float(lam), float(mu)
 
-    def score_matrix(self, home: str, away: str) -> np.ndarray:
-        lam, mu = self.expected_goals(home, away)
+    def score_matrix(self, home: str, away: str, neutral: bool = False) -> np.ndarray:
+        lam, mu = self.expected_goals(home, away, neutral)
         g = np.arange(MAX_GOALS + 1)
         m = np.outer(poisson.pmf(g, lam), poisson.pmf(g, mu))
         m[0, 0] *= 1 - lam * mu * self.rho
@@ -121,9 +124,9 @@ class DixonColes:
         m[1, 1] *= 1 - self.rho
         return m / m.sum()
 
-    def predict(self, home: str, away: str) -> dict:
-        m = self.score_matrix(home, away)
-        lam, mu = self.expected_goals(home, away)
+    def predict(self, home: str, away: str, neutral: bool = False) -> dict:
+        m = self.score_matrix(home, away, neutral)
+        lam, mu = self.expected_goals(home, away, neutral)
         total = np.add.outer(np.arange(MAX_GOALS + 1), np.arange(MAX_GOALS + 1))
         return {
             "home": float(np.tril(m, -1).sum()),

@@ -57,6 +57,8 @@ class Watcher:
         self.max_wait = timedelta(hours=cfg("LIVE_MAX_WAIT_HOURS", 30))
         self.state = json.load(open(STATE)) if os.path.exists(STATE) else {}
         self.deferred: dict[str, datetime] = {}
+        self.slugs: dict[str, str] = {}
+        self.slug_retry: dict[str, datetime] = {}
         self.last_sync = now()
 
     # ---------- git / ledger ----------
@@ -132,7 +134,7 @@ class Watcher:
                 k = kickoff(r)
             except ValueError:
                 continue
-            if r.get("league") in espn.SLUGS and k + timedelta(hours=4) > now():
+            if (r.get("league") in espn.SLUGS or r.get("league") == "INT") and k + timedelta(hours=4) > now():
                 out.append((k, r))
         return sorted(out, key=lambda x: x[0])
 
@@ -140,6 +142,20 @@ class Watcher:
         boards = {}
         for k, row in active:
             lg = row["league"]
+            if lg == "INT":  # national teams: find which ESPN competition has the game, then remember it
+                eid = str(row["event_id"])
+                slug = (self.state.get(eid) or {}).get("slug") or self.slugs.get(eid)
+                if slug is None:
+                    if now() < self.slug_retry.get(eid, now()):
+                        continue
+                    slug, _ = espn.find_any(espn.slugs_for("INT", row["sport_key"]), row["home"], row["away"],
+                                            row["kickoff"])
+                    if slug is None:
+                        self.slug_retry[eid] = now() + timedelta(minutes=5)
+                        print(f"no ESPN match yet for {row['home']} v {row['away']}")
+                        continue
+                    self.slugs[eid] = slug
+                lg = slug
             if lg not in boards:
                 try:
                     boards[lg] = espn.between(lg, k - timedelta(hours=12), k + timedelta(hours=12))
@@ -161,7 +177,7 @@ class Watcher:
             return
         if prev is None:  # first look: remember the score, nothing to announce yet
             self.state[eid] = {"hs": e["hs"], "as": e["as"], "n": len(e["goals"]), "kickoff": row["kickoff"],
-                               "espn": e["id"]}
+                               "espn": e["id"], "slug": self.slugs.get(eid)}
             print(f"watching {row['home']} v {row['away']}: {e['hs']}-{e['as']} ({e['detail']})")
             if not e["completed"]:
                 return
@@ -258,6 +274,15 @@ def main():
     ap.add_argument("--replay", help="YYYYMMDD: print what would have been posted that day")
     args = ap.parse_args()
     load_env()
+    if args.replay == "probe":  # which ESPN national-team competitions answer, and their games today/tomorrow
+        d = now()
+        for slug in espn.INT_SLUGS:
+            try:
+                evs = espn.between(slug, d, d + timedelta(days=1))
+                print(f"{slug}: OK, {len(evs)} games  " + "; ".join(f"{e['home']} v {e['away']}" for e in evs[:4]))
+            except Exception as e:  # noqa: BLE001
+                print(f"{slug}: {e}")
+        return
     if args.replay:
         replay(args.replay)
         return

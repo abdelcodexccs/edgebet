@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from edgebet import announce, espn, ledger, live, reasons, ucl
+from edgebet import announce, espn, intl, ledger, live, reasons, ucl
 from edgebet.data import load_league
 from edgebet.model import DixonColes
 from edgebet.strategy import OUTCOMES, Rules, pick, probabilities
@@ -157,6 +157,23 @@ def main():
                     r = ledger.settle(book, ev["id"], *fs)
                     if r:
                         settled.append(r)
+    for row in book[(book["status"] == "pending") & (book["league"] == "INT")].to_dict("records"):
+        k = pd.Timestamp(row["kickoff"])
+        if k > pd.Timestamp(now) - pd.Timedelta(hours=2):
+            continue
+        e = None
+        if use_espn:
+            _, e = espn.find_any(espn.slugs_for("INT", row["sport_key"]), row["home"], row["away"], row["kickoff"])
+        if e and e["completed"] and e["hs"] is not None:
+            r = ledger.settle(book, row["event_id"], *espn.ninety_minute_score(e))
+        else:  # fallback: The Odds API (2 credits)
+            r = None
+            for ev in feed.scores(row["sport_key"]):
+                fs = live.final_score(ev)
+                if ev["id"] == row["event_id"] and fs and None not in fs:
+                    r = ledger.settle(book, ev["id"], *fs)
+        if r:
+            settled.append(r)
     if "UCL" in leagues and now.weekday() in (2, 3, 4) and use_espn:  # Wed-Fri: collect Tue-Thu results
         try:
             evs = [e for e in espn.between("UCL", now - timedelta(days=3), now)
@@ -181,32 +198,8 @@ def main():
     if quota_full and not cfg("RESULTS_ONLY", False):
         print(f"Today's {posted_today} pick(s) already posted: no pricing, no credits spent")
     look = cfg("LOOKAHEAD_HOURS", 30)
-    for lg in ([] if cfg("RESULTS_ONLY", False) or quota_full else leagues):
-        sport, name, tag = live.LEAGUES[lg]
-        today = pd.Timestamp(now.replace(tzinfo=None))
-        season_start = pd.Timestamp(now.year if now.month >= 7 else now.year - 1, 7, 1)
-        if use_espn and lg in espn.SLUGS:  # free fixture check before spending an Odds API credit
-            n_fix = espn.fixtures_between(lg, now, now + timedelta(hours=look))
-            if n_fix == 0:
-                print(f"  {name}: no games in the next {look}h (ESPN), odds not fetched")
-                continue
-        events = live.upcoming(feed.odds(sport), look, now)
-        if not events:
-            continue
-        if lg == "UCL":
-            # one model across all linked leagues + every Champions League result
-            hist, mapper, _ = ucl.load_combined(data_dir, since=today - pd.Timedelta(days=3 * 365), until=today)
-            matcher = mapper
-            matcher.match = mapper.map
-            min_n = cfg("UCL_MIN_MATCHES", 25)
-        else:
-            hist = load_league(os.path.join(data_dir, lg))
-            hist = hist[(hist["Date"] < today) & (hist["Date"] >= today - pd.Timedelta(days=3 * 365))]
-            matcher = None
-            min_n = rules.min_matches
-        model = DixonColes().fit(hist, as_of=pd.Timestamp(now.date()))
-        if matcher is None:
-            matcher = live.TeamMatcher(model.teams)
+
+    def price(lg, sport, name, tag, events, hist, model, matcher, min_n, season_start, neutral=False):
         for ev in events:
             if (book["event_id"] == ev["id"]).any():
                 continue  # already posted
@@ -216,8 +209,8 @@ def main():
                 continue
             h, a = matcher.match(e["home"]), matcher.match(e["away"])
             if not h or not a:
-                if lg == "UCL":  # clubs from leagues the model doesn't cover
-                    scan.append(f"{e['home']} v {e['away']}: team not rated (league not covered)")
+                if lg in ("UCL", "INT"):  # clubs/countries the model doesn't cover
+                    scan.append(f"{e['home']} v {e['away']}: team not rated")
                 else:
                     alerts.append(f"Unmatched team: {e['home']} / {e['away']} -> add to team_aliases.csv")
                 continue
@@ -227,7 +220,7 @@ def main():
             if e["sharp"] is None and cfg("REQUIRE_SHARP", True):
                 scan.append(f"{e['home']} v {e['away']}: no Pinnacle price ({e['n_books']} books)")
                 continue
-            mp = model.predict(h, a)
+            mp = model.predict(h, a, neutral)
             p = probabilities(mp, e["sharp"], rules.blend if e["sharp"] else 1.0)
             b = pick(p, e["odds"], rules)
             evs = [p[k] * e["odds"][k] - 1 for k in range(3)]
@@ -247,6 +240,59 @@ def main():
                        "final_p": lean["p"], "book": e["book_names"][lean["k"]], "why": why,
                        "tier": "value" if b else "lean"}
                 (candidates if b else leans).append(row)
+
+    today = pd.Timestamp(now.replace(tzinfo=None))
+    season_start = pd.Timestamp(now.year if now.month >= 7 else now.year - 1, 7, 1)
+    pricing = not cfg("RESULTS_ONLY", False) and not quota_full
+    club_games = 0
+    for lg in (leagues if pricing else []):
+        sport, name, tag = live.LEAGUES[lg]
+        if use_espn and lg in espn.SLUGS:  # free fixture check before spending an Odds API credit
+            n_fix = espn.fixtures_between(lg, now, now + timedelta(hours=look))
+            if n_fix == 0:
+                print(f"  {name}: no games in the next {look}h (ESPN), odds not fetched")
+                continue
+        events = live.upcoming(feed.odds(sport), look, now)
+        if not events:
+            continue
+        club_games += len(events)
+        if lg == "UCL":
+            # one model across all linked leagues + every Champions League result
+            hist, mapper, _ = ucl.load_combined(data_dir, since=today - pd.Timedelta(days=3 * 365), until=today)
+            matcher = mapper
+            matcher.match = mapper.map
+            min_n = cfg("UCL_MIN_MATCHES", 25)
+        else:
+            hist = load_league(os.path.join(data_dir, lg))
+            hist = hist[(hist["Date"] < today) & (hist["Date"] >= today - pd.Timedelta(days=3 * 365))]
+            matcher = None
+            min_n = rules.min_matches
+        model = DixonColes().fit(hist, as_of=pd.Timestamp(now.date()))
+        if matcher is None:
+            matcher = live.TeamMatcher(model.teams)
+        price(lg, sport, name, tag, events, hist, model, matcher, min_n, season_start)
+
+    # 3b. national teams (Nations League, qualifiers, friendlies...) when the clubs are on a break
+    if pricing and cfg("INTERNATIONALS", True) and not args.mock and (club_games == 0 or cfg("INTL_ALWAYS", False)):
+        try:
+            comps = [c for c in live.fetch_sports() if intl.is_international(c)]
+        except Exception as e:  # noqa: BLE001
+            comps = []
+            print(f"  could not list international competitions: {e}")
+        print("  international competitions on now: " + (", ".join(c["title"] for c in comps) or "none"))
+        model = hist = matcher = None
+        for c in comps:
+            events = live.upcoming(feed.odds(c["key"]), look, now)
+            if not events:
+                continue
+            if model is None:
+                hist = intl.load(today - pd.Timedelta(days=cfg("INTL_YEARS", 6) * 365), today)
+                model = DixonColes(xi=cfg("INTL_XI", 0.0012)).fit(hist, as_of=pd.Timestamp(now.date()))
+                matcher = intl.matcher(model.teams)
+                print(f"  national-team model: {len(hist)} games, {len(model.teams)} teams, "
+                      f"home edge {model.home_adv:.2f}")
+            price("INT", c["key"], c["title"], intl.hashtag(c["key"]), events, hist, model, matcher,
+                  cfg("INTL_MIN_MATCHES", 15), None, intl.neutral(c["key"]))
 
     print(f"\nGames checked in the next {cfg('LOOKAHEAD_HOURS', 30)}h: {len(scan)}")
     for line in scan:

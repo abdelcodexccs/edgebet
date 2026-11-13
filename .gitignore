@@ -7,3 +7,4 @@ _to_delete/
 data_hist/
 data_tennis/
 results/
+.cache/

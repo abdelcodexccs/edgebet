@@ -16,6 +16,16 @@ from .live import _norm
 URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/scoreboard"
 SLUGS = {"E0": "eng.1", "SP1": "esp.1", "I1": "ita.1", "D1": "ger.1", "F1": "fra.1", "UCL": "uefa.champions",
          "P1": "por.1", "N1": "ned.1"}
+# national teams: Odds API sport key -> ESPN competition(s); unknown keys try INT_SLUGS
+KEY2SLUG = {"soccer_uefa_nations_league": ["uefa.nations"], "soccer_fifa_world_cup": ["fifa.world"],
+            "soccer_fifa_world_cup_qualifiers_europe": ["fifa.worldq.uefa"],
+            "soccer_fifa_world_cup_qualifiers_south_america": ["fifa.worldq.conmebol"],
+            "soccer_uefa_european_championship": ["uefa.euro"], "soccer_uefa_euro_qualification": ["uefa.euroq"],
+            "soccer_africa_cup_of_nations": ["caf.nations"], "soccer_conmebol_copa_america": ["conmebol.america"],
+            "soccer_international_friendlies": ["fifa.friendly"]}
+INT_SLUGS = ["uefa.nations", "fifa.friendly", "fifa.worldq.uefa", "uefa.euroq", "caf.nations_qual",
+             "fifa.worldq.caf", "fifa.worldq.conmebol", "fifa.worldq.concacaf", "fifa.worldq.afc",
+             "concacaf.nations.league", "afc.asian.cup.qual", "fifa.world", "uefa.euro", "caf.nations"]
 FINAL_EXTRA = ("AET", "PEN", "EXTRA")  # finished after extra time: 1X2 still settles on 90 minutes
 
 
@@ -64,9 +74,16 @@ def parse(ev: dict) -> dict | None:
             "extra_time": any(x in name.upper() for x in FINAL_EXTRA), "goals": goals}
 
 
+def slugs_for(league: str, sport_key: str = "") -> list[str]:
+    if league in SLUGS:
+        return [SLUGS[league]]
+    first = KEY2SLUG.get(sport_key, [])
+    return first + [s for s in INT_SLUGS if s not in first]
+
+
 def scoreboard(league: str, dates: str | None = None, timeout: int = 20) -> list[dict]:
-    """dates: 'YYYYMMDD' or 'YYYYMMDD-YYYYMMDD'. Raises on network errors."""
-    url = URL.format(slug=SLUGS[league]) + (f"?dates={dates}&limit=200" if dates else "")
+    """league: our code (E0, UCL ...) or an ESPN slug. dates: 'YYYYMMDD'. Raises on network errors."""
+    url = URL.format(slug=SLUGS.get(league, league)) + (f"?dates={dates}&limit=200" if dates else "")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (edgebet)"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode())
@@ -124,6 +141,20 @@ def find(events: list[dict], home: str, away: str, kickoff: str, aliases: dict |
         if (min(sh, sa) >= 0.6 or max(sh, sa) >= 0.9) and s > best_s:
             best, best_s = e, s
     return best
+
+
+def find_any(slugs: list[str], home: str, away: str, kickoff: str, aliases: dict | None = None):
+    """Search several ESPN competitions around the kick-off. Returns (slug, event) or (None, None)."""
+    k = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+    for slug in slugs:
+        try:
+            evs = between(slug, k - timedelta(hours=12), k + timedelta(hours=12))
+        except Exception:  # noqa: BLE001  (unknown competition or network error)
+            continue
+        e = find(evs, home, away, kickoff, aliases)
+        if e:
+            return slug, e
+    return None, None
 
 
 def fixtures_between(league: str, start: datetime, end: datetime) -> int | None:
