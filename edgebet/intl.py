@@ -21,7 +21,7 @@ CACHE = os.path.join(".cache", "intl_results.csv")
 # Odds API sport keys that are national-team football
 KEY_PARTS = ("fifa_world_cup", "nations_league", "uefa_european_championship", "euro_qualification",
              "copa_america", "africa_cup_of_nations", "international_friendl", "gold_cup", "asian_cup",
-             "world_cup_qualif", "uefa_euro")
+             "world_cup_qualif")
 # final tournaments are played at neutral grounds (qualifiers, Nations League and friendlies are not)
 NEUTRAL_KEYS = {"soccer_fifa_world_cup", "soccer_uefa_european_championship", "soccer_conmebol_copa_america",
                 "soccer_africa_cup_of_nations", "soccer_concacaf_gold_cup", "soccer_afc_asian_cup"}
