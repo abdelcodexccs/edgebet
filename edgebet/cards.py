@@ -152,3 +152,43 @@ def result_card(r: dict, rec: dict, stake: float = 100.0, currency: str = "$") -
         _center(d, 920, line, _fit(d, line, W - 200, 38, 800), WHITE)
     _footer(d, "Example stake only, not a bet slip.")
     return _png(im)
+
+
+def week_card(rows: list[dict], week: dict, total: dict, label: str, stake: float = 100.0,
+              currency: str = "$") -> bytes:
+    """Weekly recap: every settled pick of the week, the week's record and the all-time record."""
+    im = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(im)
+    _header(im, d, label)
+    up = week["units"] >= 0
+    accent = GREEN if up else RED
+    d.rounded_rectangle((60, 230, W - 60, 520), 40, fill=PANEL, outline=accent, width=6)
+    _center(d, 258, "THIS WEEK", _f(36, 800), GREY)
+    rec = f"{week['won']}W - {week['lost']}L" + (f" - {week['void']}V" if week.get("void") else "")
+    _center(d, 300, rec, _f(120, 900), WHITE)
+    money = f"{'+' if up else '-'}{currency}{abs(week['units']) * stake:,.0f}"
+    _center(d, 440, f"{week['units']:+.2f} units  ·  {money} on {currency}{stake:,.0f} stakes", _f(38, 800), accent)
+
+    y = 560
+    shown = rows[:7]
+    for r in shown:
+        mark = {"won": ("WON", GREEN), "void": ("VOID", GOLD)}.get(r["status"], ("LOST", RED))
+        d.rounded_rectangle((60, y, W - 60, y + 64), 18, fill=PANEL)
+        x = _pill(d, 80, y + 11, mark[0], _f(26, 900), mark[1], BG, padx=16, pady=8)
+        line = f"{r['home']} {r['score']} {r['away']}"
+        pick = markets.label(str(r.get("pick", "home")), r["home"], r["away"])
+        odds = f"@ {float(r['odds']):.2f}"
+        fo = _f(30, 800)
+        ow = d.textlength(odds, font=fo)
+        d.text((W - 80 - ow, y + 16), odds, font=fo, fill=WHITE)
+        avail = W - 80 - ow - 20 - (x + 18)
+        d.text((x + 18, y + 4), line, font=_fit(d, line, avail, 30, 800), fill=WHITE)
+        d.text((x + 18, y + 38), pick, font=_fit(d, pick, avail, 22, 600), fill=GREY)
+        y += 72
+    if len(rows) > len(shown):
+        _center(d, y + 4, f"+ {len(rows) - len(shown)} more in the channel", _f(28, 600), GREY)
+    if total.get("won", 0) + total.get("lost", 0):
+        line = f"All-time  {total['won']}W - {total['lost']}L   ·   {total['units']:+.2f} units   ·   ROI {total['roi'] * 100:+.1f}%"
+        _center(d, H - 210, line, _fit(d, line, W - 160, 34, 800), WHITE)
+    _footer(d, f"Money shown for a {currency}{stake:,.0f} example stake per pick.")
+    return _png(im)

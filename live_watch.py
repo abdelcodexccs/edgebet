@@ -116,6 +116,24 @@ class Watcher:
         except Exception as e:  # noqa: BLE001
             print("telegram failed:", e)
 
+    def post_x_result(self, r: dict, rec: dict, png: bytes | None):
+        """Full-time result on X too (picks and results only; goal alerts stay on Telegram)."""
+        from edgebet import markets, xpost
+        if not xpost.configured() or cfg("X_RESULTS", True) is False:
+            return
+        mark = {"won": "✅ WON", "void": "↩️ VOID"}.get(r["status"], "❌ LOST")
+        text = (f"🏁 FT: {r['home']} {r['score']} {r['away']}\n{mark} · "
+                f"{markets.label(str(r['pick']), r['home'], r['away'])} @ {float(r['odds']):.2f} "
+                f"({float(r['units']):+.2f}u)\n{announce.record_line(rec)}\n\n"
+                "Free picks every day on Telegram (link in bio)\n#BettingTips #FootballPicks")
+        print("\n----- X -----\n" + text + "\n-----")
+        if self.dry:
+            return
+        try:
+            xpost.post(text, png)
+        except Exception as e:  # noqa: BLE001
+            print("X result failed:", e)
+
     def chain(self):
         """Start a fresh copy of this workflow (a GitHub job is limited to ~6 hours)."""
         self.push("live watcher handoff")
@@ -213,6 +231,7 @@ class Watcher:
                     except Exception as e:  # noqa: BLE001
                         print("card failed, posting text only:", e)
                 self.post(announce.fulltime_message(r, rec, cfg("CHANNEL_FOOTER", FOOTER)), self.results_to, png)
+                self.post_x_result(r, rec, png)
 
     # ---------- main loop ----------
     def run(self):

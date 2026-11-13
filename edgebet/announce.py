@@ -25,7 +25,7 @@ def result_line(r: dict) -> str:
 def pick_lines(p: dict) -> list[str]:
     return [
         f'Today: {p["home"]} v {p["away"]}',
-        f'Pick: {p["team"]} @ {p["odds"]:.2f}',
+        f'Pick: {markets.label(p["outcome"], p["home"], p["away"])} @ {p["odds"]:.2f}',
         f'Market {_pct(p["implied"])} · Model {_pct(p["final_p"])} · EV {p["ev"] * 100:+.1f}%',
     ]
 
@@ -46,7 +46,8 @@ def compose(settled: list[dict], pick: dict | None, rec: dict, hashtag: str = ""
         blocks.append("\n".join(result_line(r) for r in settled))
     if pick is not None:
         blocks.append("\n".join(pick_lines(pick)))
-    tail = record_line(rec) + (f"\n{hashtag}" if hashtag else "")
+    tail = (record_line(rec) + "\nFree picks every day on Telegram (link in bio)"
+            + f"\n#BettingTips #FootballPicks{(' ' + hashtag) if hashtag else ''}")
     blocks.append(tail)
     text = "\n\n".join(blocks)
     if len(text) > TWEET_LIMIT and settled:  # too long: drop the oldest result and retry
@@ -54,7 +55,13 @@ def compose(settled: list[dict], pick: dict | None, rec: dict, hashtag: str = ""
     return text[:TWEET_LIMIT]
 
 
-def post_to_x(text: str) -> str:
+def post_to_x(text: str, png: bytes | None = None) -> str:
+    """Post to X with an optional picture (see xpost.py). Returns the post id."""
+    from . import xpost
+    return xpost.post(text, png)
+
+
+def _post_to_x_tweepy(text: str) -> str:
     """Post as your own account (X API v2, OAuth 1.0a user keys). Returns the tweet id."""
     import tweepy  # pip install tweepy
 
@@ -242,7 +249,8 @@ def channel_configured() -> bool:
 
 
 def x_configured() -> bool:
-    return all(os.environ.get(k) for k in ("X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"))
+    from . import xpost
+    return xpost.configured()
 
 
 def dumps(obj) -> str:

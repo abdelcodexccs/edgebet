@@ -43,8 +43,12 @@ jobs:
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
           POST_MODE: ${{ github.event.inputs.mode || vars.POST_MODE || 'live' }}
-          PUBLISH_TO: telegram
+          PUBLISH_TO: telegram,x      # X is skipped until the X_* secrets exist
           LEAGUES: ${{ vars.LEAGUES || 'E0,SP1,I1,D1,F1,UCL' }}
           MAX_PICKS_PER_DAY: ${{ vars.MAX_PICKS_PER_DAY || '3' }}
           DAILY_PICK: ${{ vars.DAILY_PICK || 'true' }}
