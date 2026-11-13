@@ -28,6 +28,24 @@ from edgebet.backtest import predict_walk_forward
 from edgebet.odds import devig
 
 
+OU_COLS = ["Max>2.5", "Max<2.5", "BbMx>2.5", "BbMx<2.5", "P>2.5", "P<2.5", "BFE>2.5", "BFE<2.5",
+           "PC>2.5", "PC<2.5", "BFEC>2.5", "BFEC<2.5"]
+_load_csv = D.load_csv
+
+
+def _load_csv_with_totals(path):
+    """The normal loader keeps only 1X2 prices; keep the over/under 2.5 prices too."""
+    df = _load_csv(path)
+    raw = pd.read_csv(path, encoding="latin1").dropna(subset=["HomeTeam", "AwayTeam"])
+    for c in OU_COLS:
+        if c in raw:
+            df[c] = pd.to_numeric(raw[c], errors="coerce").to_numpy()
+    return df
+
+
+D.load_csv = _load_csv_with_totals
+
+
 def first(df, cols):
     s = pd.Series(np.nan, index=df.index)
     for c in cols:
