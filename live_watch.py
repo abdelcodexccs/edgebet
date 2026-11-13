@@ -107,12 +107,12 @@ class Watcher:
         print("could not save the result, leaving it for the daily run")
         return None
 
-    def post(self, html: str, to: str):
-        print("\n----- POST (" + to + ") -----\n" + html + "\n-----", flush=True)
+    def post(self, html: str, to: str, png: bytes | None = None):
+        print("\n----- POST (" + to + (", with picture" if png else "") + ") -----\n" + html + "\n-----", flush=True)
         if self.dry or to == "off":
             return
         try:
-            announce.send(html, to)
+            announce.send(html, to, png)
         except Exception as e:  # noqa: BLE001
             print("telegram failed:", e)
 
@@ -204,8 +204,15 @@ class Watcher:
             h, a = espn.ninety_minute_score(e)
             r = self.settle(row, h, a)
             if r:
-                self.post(announce.fulltime_message(r, r.pop("_record"), cfg("CHANNEL_FOOTER", FOOTER)),
-                          self.results_to)
+                rec = r.pop("_record")
+                png = None
+                if cfg("CARD_IMAGES", True):
+                    try:
+                        from edgebet import cards
+                        png = cards.result_card(r, rec, cfg("CARD_STAKE", 100.0), cfg("CARD_CURRENCY", "$"))
+                    except Exception as e:  # noqa: BLE001
+                        print("card failed, posting text only:", e)
+                self.post(announce.fulltime_message(r, rec, cfg("CHANNEL_FOOTER", FOOTER)), self.results_to, png)
 
     # ---------- main loop ----------
     def run(self):

@@ -337,7 +337,15 @@ def main():
             print("\n----- TELEGRAM CHANNEL -----\n" + msg + "\n-----")
             if live_mode and announce.channel_configured():
                 try:
-                    mid = announce.post_to_channel(msg)
+                    png = None
+                    if pk and cfg("CARD_IMAGES", True):
+                        try:
+                            from edgebet import cards
+                            png = cards.pick_card(pk, pk["league_name"], local_time(pk["kickoff"]),
+                                                  cfg("CARD_STAKE", 100.0), cfg("CARD_CURRENCY", "$"))
+                        except Exception as e:  # noqa: BLE001
+                            print("card failed, posting text only:", e)
+                    mid = announce.post_photo_to_channel(png, msg) if png else announce.post_to_channel(msg)
                     published.append("Telegram")
                     if row_i is not None:
                         book.at[row_i, "message_id"] = mid

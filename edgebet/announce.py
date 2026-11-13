@@ -179,16 +179,56 @@ def fulltime_message(r: dict, rec: dict, footer: str = "") -> str:
     return "\n".join(lines)
 
 
-def send(text_html: str, to: str = "channel") -> None:
-    """to: 'channel', 'me' (your private chat with the bot) or 'both'."""
+def send(text_html: str, to: str = "channel", png: bytes | None = None) -> None:
+    """to: 'channel', 'me' (your private chat with the bot) or 'both'. png: optional picture."""
     if to in ("channel", "both") and channel_configured():
-        post_to_channel(text_html)
+        post_photo_to_channel(png, text_html) if png else post_to_channel(text_html)
     if to in ("me", "both"):
         token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
         chat = (os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
         if token and chat:
             data = urllib.parse.urlencode({"chat_id": chat, "text": text_html, "parse_mode": "HTML"}).encode()
             urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data, timeout=20)
+
+
+def _creds():
+    token = os.environ["TELEGRAM_BOT_TOKEN"].strip().strip('"').strip("'")
+    chat = os.environ["TELEGRAM_CHANNEL_ID"].strip().strip('"').strip("'")
+    token = token.split("=", 1)[1].strip() if token.upper().startswith("TELEGRAM_BOT_TOKEN=") else token
+    chat = chat.split("=", 1)[1].strip() if chat.upper().startswith("TELEGRAM_CHANNEL_ID=") else chat
+    return token, chat
+
+
+def _visible_len(text_html: str) -> int:
+    import re
+    return len(html.unescape(re.sub(r"<[^>]+>", "", text_html)))
+
+
+def post_photo_to_channel(png: bytes, text_html: str, chat: str | None = None) -> str:
+    """Picture + message. Telegram captions hold 1024 characters: a longer message goes
+    right under the picture as its own post. Returns the id of the post holding the text."""
+    import uuid
+    token, channel = _creds()
+    chat = chat or channel
+    fits = _visible_len(text_html) <= 1024
+    fields = {"chat_id": chat}
+    if fits:
+        fields.update({"caption": text_html, "parse_mode": "HTML"})
+    boundary = uuid.uuid4().hex
+    body = b""
+    for k, v in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n").encode()
+    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"card.png\"\r\n"
+             f"Content-Type: image/png\r\n\r\n").encode() + png + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendPhoto", data=body,
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        resp = json.loads(r.read().decode())
+    if not resp.get("ok"):
+        raise RuntimeError(resp)
+    if fits:
+        return str(resp["result"]["message_id"])
+    return post_to_channel(text_html)
 
 
 def channel_configured() -> bool:
