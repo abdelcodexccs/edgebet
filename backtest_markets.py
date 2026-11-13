@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -69,10 +69,10 @@ def bets_for(preds: pd.DataFrame, lg: str) -> list[dict]:
         sharp = np.array([getattr(r, c) for c in D.BOOKS["sharp"]], float)
         close = np.array([getattr(r, c) for c in D.BOOKS["sharp_close"]], float)
         best = np.array([getattr(r, c) for c in D.BOOKS["best"]], float)
-        if not (np.isfinite(sharp).all() and np.isfinite(best).all()):
+        if not (np.isfinite(sharp).all() and np.isfinite(best).all() and (sharp > 1.01).all() and (best > 1.01).all()):
             continue
         fair = devig(sharp)
-        fc = devig(close) if np.isfinite(close).all() else fair
+        fc = devig(close) if np.isfinite(close).all() and (close > 1.01).all() else fair
         m = np.array([r.model_home, r.model_draw, r.model_away])
         p = 0.5 * m + 0.5 * fair
         p = p / p.sum()
@@ -100,9 +100,12 @@ def bets_for(preds: pd.DataFrame, lg: str) -> list[dict]:
             profit = o - 1 if res == k else 0.0 if res == 1 else -1.0
             add("DNB", side, o, p[k] / (1 - p[1]), ev, fc[k] * o + fc[1] - 1, profit,
                 (m[k] / (1 - m[1]) + fair[k] / (1 - fair[1])) / 2)
-        if all(np.isfinite([r.best_o, r.best_u, r.sharp_o, r.sharp_u])):
+        def ok(*xs):
+            return all(np.isfinite(x) and x > 1.01 for x in xs)
+
+        if ok(r.best_o, r.best_u, r.sharp_o, r.sharp_u):
             fo = devig(np.array([r.sharp_o, r.sharp_u]))
-            fco = devig(np.array([r.close_o, r.close_u])) if np.isfinite([r.close_o, r.close_u]).all() else fo
+            fco = devig(np.array([r.close_o, r.close_u])) if ok(r.close_o, r.close_u) else fo
             po = 0.5 * r.model_over25 + 0.5 * fo[0]
             for side, o, q, qc, hit, mq, fq in (("over", r.best_o, po, fco[0], goals > 2.5, r.model_over25, fo[0]),
                                                 ("under", r.best_u, 1 - po, fco[1], goals < 2.5,
@@ -149,7 +152,7 @@ def main():
     ap.add_argument("--data", default="data_hist")
     ap.add_argument("--no-fetch", action="store_true")
     args = ap.parse_args()
-    end = pd.Timestamp(datetime.utcnow().date())
+    end = pd.Timestamp(datetime.now(timezone.utc).date())
     start = end - pd.Timedelta(days=int(365.25 * args.years))
     if not args.no_fetch:
         fetch(args.data, start.year - 4, end.year if end.month >= 7 else end.year - 1)
