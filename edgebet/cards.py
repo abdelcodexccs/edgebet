@@ -10,6 +10,8 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import markets
+
 HERE = os.path.join(os.path.dirname(__file__), "..", "assets")
 FONT = os.path.join(HERE, "fonts", "Montserrat.ttf")
 W, H = 1080, 1350
@@ -89,9 +91,10 @@ def pick_card(p: dict, league: str, kickoff_local: str, stake: float = 100.0, cu
     match = f"{p['home']}  vs  {p['away']}"
     _center(d, 360, match, _fit(d, match, W - 200, 60, 800), WHITE)
 
-    side = "Draw" if p.get("outcome") == "draw" else f"{p['team']} to win"
+    side = markets.label(p.get("outcome", "home"), p["home"], p["away"])
+    kind = markets.NAMES.get(p.get("outcome"), "Our pick").upper()
     d.rounded_rectangle((100, 460, W - 100, 640), 30, fill=PANEL2)
-    d.text((140, 482), "OUR PICK", font=_f(30, 700), fill=GREY)
+    d.text((140, 482), kind, font=_f(30, 700), fill=GREY)
     d.text((140, 524), side, font=_fit(d, side, 560, 64, 900), fill=WHITE)
     d.text((W - 140 - d.textlength("ODDS", font=_f(30, 700)), 482), "ODDS", font=_f(30, 700), fill=GREY)
     odds = f"{float(p['odds']):.2f}"
@@ -122,23 +125,24 @@ def pick_card(p: dict, league: str, kickoff_local: str, stake: float = 100.0, cu
 def result_card(r: dict, rec: dict, stake: float = 100.0, currency: str = "$") -> bytes:
     """r: a settled ledger row (home, away, score, team, odds, status, units)."""
     won = r["status"] == "won"
+    void = r["status"] == "void"
     im = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(im)
     _header(im, d, "FULL TIME")
-    accent = GREEN if won else RED
+    accent = GREEN if won else GOLD if void else RED
 
     d.rounded_rectangle((60, 230, W - 60, 1060), 40, fill=PANEL, outline=accent, width=6)
-    _center(d, 280, "WON" if won else "LOST", _f(170, 900), accent)
+    _center(d, 280, "WON" if won else "VOID" if void else "LOST", _f(170, 900), accent)
     score = f"{r['home']}  {r['score']}  {r['away']}"
     _center(d, 500, score, _fit(d, score, W - 200, 58, 800), WHITE)
-    pick = f"Pick: {r['team']} @ {float(r['odds']):.2f}"
+    pick = f"Pick: {markets.label(str(r.get('pick', 'home')), r['home'], r['away'])} @ {float(r['odds']):.2f}"
     _center(d, 590, pick, _fit(d, pick, W - 200, 42, 700), GREY)
 
-    d.rounded_rectangle((100, 680, W - 100, 860), 30, fill=(16, 52, 40) if won else (60, 22, 30))
-    back = stake * float(r["odds"]) if won else 0.0
+    d.rounded_rectangle((100, 680, W - 100, 860), 30, fill=(16, 52, 40) if won else (60, 50, 20) if void else (60, 22, 30))
+    back = stake * float(r["odds"]) if won else stake if void else 0.0
     profit = back - stake
     d.text((140, 705), f"Example stake  {currency}{stake:,.0f}", font=_f(34, 700), fill=WHITE)
-    d.text((140, 760), "Profit" if won else "Lost", font=_f(44, 800), fill=WHITE)
+    d.text((140, 760), "Profit" if won else "Stake back" if void else "Lost", font=_f(44, 800), fill=WHITE)
     amount = f"{'+' if profit >= 0 else '-'}{currency}{abs(profit):,.2f}"
     fa = _f(84, 900)
     d.text((W - 140 - d.textlength(amount, font=fa), 735), amount, font=fa, fill=accent)

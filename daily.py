@@ -23,11 +23,15 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from edgebet import announce, espn, intl, ledger, live, reasons, ucl
+from edgebet import announce, espn, intl, ledger, live, markets, reasons, ucl
 from edgebet.data import load_league
 from edgebet.model import DixonColes
 from edgebet.strategy import OUTCOMES, Rules, pick, probabilities
 
+
+# Extra bet types switched on, with the rules that held up in the market backtest:
+# pick code -> (min odds, max odds, min edge for a VALUE pick). Codes not listed are off.
+MARKET_RULES: dict = {}
 
 def load_env(path=".env"):
     if not os.path.exists(path):
@@ -229,15 +233,43 @@ def main():
                         + " | EV " + "/".join(f"{x:+.1%}" for x in evs) + (" <- PICK" if b else ""))
             # best playable side even below the value bar (for "pick of the day" mode)
             lean = b or pick(p, e["odds"], Rules(**{**rules.__dict__, "min_ev": -1.0}))
+            # more bet types: double chance, draw no bet, over/under (each with its own tested rules)
+            extra = [x for x in markets.extra_bets(e["odds"], e["sharp"], p, e.get("totals"), mp["over25"],
+                                                   rules.blend if e["sharp"] else 1.0)
+                     if x["outcome"] in MARKET_RULES and
+                     MARKET_RULES[x["outcome"]][0] <= x["odds"] <= MARKET_RULES[x["outcome"]][1]]
+            for x in extra:
+                if x["ev"] >= MARKET_RULES[x["outcome"]][2] and (b is None or x["ev"] > b["ev"]):
+                    b = lean = x
+                elif not b and lean is not None and x["ev"] > lean["ev"]:
+                    lean = x
+                elif not b and lean is None:
+                    lean = x
+            if extra:
+                scan.append("      more bets: " + ", ".join(
+                    f"{markets.label(x['outcome'], 'H', 'A')} {x['odds']:.2f} EV {x['ev']:+.1%}" for x in extra))
             if lean and not b:
                 lean["stake_frac"] = cfg("LEAN_STAKE", 0.005)  # small flat stake, no edge to size on
             if lean:
-                team = {"home": e["home"], "away": e["away"], "draw": "Draw"}[lean["outcome"]]
-                why = reasons.build(hist, model, h, a, lean["outcome"], {h: e["home"], a: e["away"]},
-                                    season_start) if lean["outcome"] != "draw" else []
+                team = markets.short(lean["outcome"], e["home"], e["away"])
+                side = {"1X": "home", "dnb_home": "home", "X2": "away", "dnb_away": "away"}.get(
+                    lean["outcome"], lean["outcome"])
+                if side in ("home", "away"):
+                    why = reasons.build(hist, model, h, a, side, {h: e["home"], a: e["away"]}, season_start)
+                elif side.startswith(("over", "under")):
+                    why = reasons.goals(hist, model, h, a, side, {h: e["home"], a: e["away"]}, season_start)
+                else:
+                    why = []
+                model_p = {"1X": mp["home"] + mp["draw"], "X2": mp["away"] + mp["draw"],
+                           "dnb_home": mp["home"] / (1 - mp["draw"]), "dnb_away": mp["away"] / (1 - mp["draw"]),
+                           "over2.5": mp["over25"], "under2.5": 1 - mp["over25"]}.get(lean["outcome"])
+                book_name = (e["book_names"][lean["k"]] if lean["k"] >= 0 else
+                             (e["totals"]["books"][0 if lean["outcome"] == "over2.5" else 1] if e.get("totals") else ""))
+                if lean["outcome"] in ("1X", "X2", "dnb_home", "dnb_away"):
+                    book_name = f"{e['book_names'][lean['k']]} + {e['book_names'][1]}"
                 row = {**e, **lean, "league": lg, "league_name": name, "sport_key": sport,
-                       "hashtag": tag, "team": team, "model_p": mp[lean["outcome"]],
-                       "final_p": lean["p"], "book": e["book_names"][lean["k"]], "why": why,
+                       "hashtag": tag, "team": team, "model_p": model_p if model_p is not None else mp[lean["outcome"]],
+                       "final_p": lean["p"], "book": book_name, "why": why,
                        "tier": "value" if b else "lean"}
                 (candidates if b else leans).append(row)
 

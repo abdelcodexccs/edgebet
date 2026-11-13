@@ -6,6 +6,8 @@ import os
 
 import pandas as pd
 
+from . import markets
+
 COLUMNS = ["posted_at", "event_id", "league", "sport_key", "kickoff", "home", "away",
            "pick", "team", "odds", "book", "implied", "model_p", "final_p", "ev",
            "stake_pct", "tier", "status", "score", "units", "message_id", "tweet_id"]
@@ -35,11 +37,10 @@ def settle(df: pd.DataFrame, event_id: str, home_goals: int, away_goals: int) ->
     if not len(idx):
         return None
     i = idx[0]
-    result = "home" if home_goals > away_goals else "away" if away_goals > home_goals else "draw"
-    won = df.at[i, "pick"] == result
-    df.at[i, "status"] = "won" if won else "lost"
+    res = markets.outcome(str(df.at[i, "pick"]), int(home_goals), int(away_goals))
+    df.at[i, "status"] = res  # won / lost / void (draw no bet on a draw: stake back)
     df.at[i, "score"] = f"{home_goals}-{away_goals}"
-    df.at[i, "units"] = round(float(df.at[i, "odds"]) - 1, 2) if won else -1.0
+    df.at[i, "units"] = round(float(df.at[i, "odds"]) - 1, 2) if res == "won" else 0.0 if res == "void" else -1.0
     return df.loc[i].to_dict()
 
 

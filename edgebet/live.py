@@ -15,6 +15,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 API = "https://api.the-odds-api.com/v4/sports/{sport}/{endpoint}"
+CREDITS = {"left": None}  # updated from every Odds API reply
 
 # league folder (football-data code) -> The Odds API sport key
 LEAGUES = {
@@ -97,13 +98,23 @@ def _get(sport: str, endpoint: str, params: dict) -> list:
         left = r.headers.get("x-requests-remaining")
         if left is not None:
             print(f"  odds-api credits left: {left}")
+            try:
+                CREDITS["left"] = int(float(left))
+            except ValueError:
+                pass
         return json.loads(r.read().decode())
 
 
 def fetch_odds(sport: str, regions: str | None = None) -> list:
-    """Each region costs 1 credit per call. 'eu' already includes Pinnacle."""
+    """Each region costs 1 credit per market per call. 'eu' already includes Pinnacle.
+    ODDS_MARKETS=h2h,totals also fetches over/under, unless credits are running low."""
     regions = regions or os.environ.get("ODDS_REGIONS", "eu")
-    return _get(sport, "odds", {"regions": regions, "markets": "h2h", "oddsFormat": "decimal"})
+    mk = os.environ.get("ODDS_MARKETS", "h2h")
+    low = int(os.environ.get("MIN_CREDITS_FOR_EXTRA", "60"))
+    if mk != "h2h" and CREDITS["left"] is not None and CREDITS["left"] < low:
+        print(f"  credits below {low}: winner market only")
+        mk = "h2h"
+    return _get(sport, "odds", {"regions": regions, "markets": mk, "oddsFormat": "decimal"})
 
 
 def fetch_sports() -> list:
@@ -154,8 +165,24 @@ def parse_event(ev: dict, bet_book: str = "best") -> dict | None:
         if bet_book not in books:
             return None
         odds, names = books[bet_book][1], [books[bet_book][0]] * 3
+    # over / under 2.5 goals, when the totals market was fetched
+    tot = {}
+    for b in ev.get("bookmakers", []):
+        for m in b.get("markets", []):
+            if m["key"] != "totals":
+                continue
+            px = {o["name"].lower(): o["price"] for o in m["outcomes"] if abs(float(o.get("point", 0)) - 2.5) < 1e-6}
+            if "over" in px and "under" in px:
+                tot[b["key"]] = (b["title"], px["over"], px["under"])
+    totals = None
+    if tot:
+        soft = {k: v for k, v in tot.items() if k != "pinnacle" and not k.startswith(exch)} or tot
+        ko = max(soft, key=lambda k: soft[k][1])
+        ku = max(soft, key=lambda k: soft[k][2])
+        totals = {"best": (soft[ko][1], soft[ku][2]), "books": (soft[ko][0], soft[ku][0]),
+                  "sharp": (tot["pinnacle"][1], tot["pinnacle"][2]) if "pinnacle" in tot else None}
     return {"event_id": ev["id"], "kickoff": ev["commence_time"], "home": home, "away": away,
-            "odds": odds, "book_names": names, "sharp": sharp, "n_books": len(books)}
+            "odds": odds, "book_names": names, "sharp": sharp, "n_books": len(books), "totals": totals}
 
 
 def upcoming(events: list, hours: int = 30, now: datetime | None = None) -> list:

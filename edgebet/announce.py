@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+
+from . import markets
 import json
 import os
 import urllib.parse
@@ -15,7 +17,7 @@ def _pct(x: float) -> str:
 
 
 def result_line(r: dict) -> str:
-    mark = "✅" if r["status"] == "won" else "❌"
+    mark = {"won": "✅", "void": "↩️"}.get(r["status"], "❌")
     sign = f'{float(r["units"]):+.2f}u'
     return f'{mark} {r["home"]} {r["score"]} {r["away"]} ({r["team"]} {sign})'
 
@@ -83,14 +85,16 @@ def _esc(s) -> str:
 
 
 def channel_result(r: dict) -> str:
-    won = r["status"] == "won"
-    head = "✅ <b>WON</b>" if won else "❌ <b>LOST</b>"
+    head = {"won": "✅ <b>WON</b>", "void": "↩️ <b>VOID</b> (stake back)"}.get(r["status"], "❌ <b>LOST</b>")
+    pick = markets.label(str(r["pick"]), r["home"], r["away"])
     return (f'{head}  {_esc(r["home"])} {_esc(r["score"])} {_esc(r["away"])}\n'
-            f'Pick was {_esc(r["team"])} @ {float(r["odds"]):.2f} → {float(r["units"]):+.2f} units')
+            f'Pick was {_esc(pick)} @ {float(r["odds"]):.2f} → {float(r["units"]):+.2f} units')
 
 
 def channel_pick(p: dict, why: list[str], league: str, kickoff_local: str) -> str:
-    side = "Draw" if p["outcome"] == "draw" else f'{_esc(p["team"])} to win'
+    side = _esc(markets.label(p["outcome"], p["home"], p["away"]))
+    if p["outcome"] in markets.NAMES:
+        side = f'{markets.NAMES[p["outcome"]]}: {side}'
     lines = [
         f"⚽ <b>{_esc(league)}</b> · {_esc(kickoff_local)}",
         f'🏟 {_esc(p["home"])} vs {_esc(p["away"])}',
@@ -158,8 +162,8 @@ def goal_message(e: dict, goal: dict | None, side: str, pick: dict | None) -> st
         tag = " (own goal)" if goal.get("own_goal") else " (penalty)" if goal.get("penalty") else ""
         lines.append(f"Scorer: {_esc(goal['scorer'])}{tag}")
     if pick:
-        lines += ["", f'🎯 Our pick: {_esc(pick["team"])} @ {float(pick["odds"]):.2f} · '
-                      f'{_status_vs_pick(pick["pick"], e["hs"], e["as"])}']
+        lines += ["", f'🎯 Our pick: {_esc(markets.label(str(pick["pick"]), pick["home"], pick["away"]))} @ {float(pick["odds"]):.2f} · '
+                      f'{markets.live_status(str(pick["pick"]), e["hs"], e["as"])}']
     return "\n".join(lines)
 
 
@@ -169,10 +173,10 @@ def goal_cancelled_message(e: dict, pick: dict | None) -> str:
 
 
 def fulltime_message(r: dict, rec: dict, footer: str = "") -> str:
-    won = r["status"] == "won"
+    head = {"won": "✅ <b>WON</b>", "void": "↩️ <b>VOID</b> (stake back)"}.get(r["status"], "❌ <b>LOST</b>")
+    pick = markets.label(str(r["pick"]), r["home"], r["away"])
     lines = [f'🏁 <b>FULL TIME</b> · {_esc(r["home"])} {_esc(r["score"])} {_esc(r["away"])}',
-             ("✅ <b>WON</b>" if won else "❌ <b>LOST</b>") +
-             f' · Pick was {_esc(r["team"])} @ {float(r["odds"]):.2f} → {float(r["units"]):+.2f} units',
+             head + f' · Pick was {_esc(pick)} @ {float(r["odds"]):.2f} → {float(r["units"]):+.2f} units',
              "", "📈 " + _esc(record_line(rec))]
     if footer:
         lines += ["", f"<i>{_esc(footer)}</i>"]

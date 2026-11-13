@@ -84,3 +84,32 @@ def build(hist: pd.DataFrame, model, home: str, away: str, side: str,
     xg_h, xg_a = model.expected_goals(home, away)
     lines.append(f"Model projects {names.get(home, home)} {xg_h:.1f} – {xg_a:.1f} {names.get(away, away)} in expected goals")
     return lines
+
+
+def goals(hist: pd.DataFrame, model, home: str, away: str, side: str,
+          names: dict | None = None, season_start: pd.Timestamp | None = None) -> list[str]:
+    """Reasons for an over / under 2.5 goals pick. side = 'over2.5' or 'under2.5'."""
+    names = names or {}
+    over = side.startswith("over")
+    lines = []
+    for t in (home, away):
+        g = _team_games(hist, t)
+        if season_start is not None:
+            g = g[g["Date"] >= season_start]
+        g = g.tail(10)
+        if len(g) >= 4:
+            n_over = int(((g["gf"] + g["ga"]) > 2.5).sum())
+            avg = (g["gf"] + g["ga"]).mean()
+            k = n_over if over else len(g) - n_over
+            lines.append(f"{names.get(t, t)}: {k} of their last {len(g)} games went "
+                         f"{'over' if over else 'under'} 2.5 ({avg:.1f} goals a game)")
+    h2h = hist[((hist["HomeTeam"] == home) & (hist["AwayTeam"] == away)) |
+               ((hist["HomeTeam"] == away) & (hist["AwayTeam"] == home))].tail(5)
+    if len(h2h) >= 3:
+        n = int(((h2h["FTHG"] + h2h["FTAG"]) > 2.5).sum())
+        k = n if over else len(h2h) - n
+        lines.append(f"Head to head: {k} of the last {len(h2h)} meetings went {'over' if over else 'under'} 2.5")
+    xg_h, xg_a = model.expected_goals(home, away)
+    lines.append(f"Model projects {names.get(home, home)} {xg_h:.1f} – {xg_a:.1f} {names.get(away, away)} "
+                 f"({xg_h + xg_a:.1f} goals expected)")
+    return lines
