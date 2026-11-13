@@ -32,6 +32,10 @@ from edgebet.strategy import OUTCOMES, Rules, pick, probabilities
 # Extra bet types switched on, with the rules that held up in the market backtest:
 # pick code -> (min odds, max odds, min edge for a VALUE pick). Codes not listed are off.
 MARKET_RULES: dict = {}
+# "Pick of the day" on days without a value bet: "likely" = the most likely bet of the day
+# (team to win, double chance or draw no bet); "edge" = the old rule (closest to a value bet).
+POD_MODE = os.environ.get("POD_MODE", "likely")
+POD_MARKETS = ("home", "away", "1X", "X2", "dnb_home", "dnb_away")
 
 def load_env(path=".env"):
     if not os.path.exists(path):
@@ -231,47 +235,65 @@ def main():
             scan.append(f"[{lg}] {e['home']} v {e['away']}: ours H/D/A " + "/".join(f"{x:.0%}" for x in p)
                         + " | best odds " + "/".join(f"{x:.2f}" for x in e["odds"])
                         + " | EV " + "/".join(f"{x:+.1%}" for x in evs) + (" <- PICK" if b else ""))
-            # best playable side even below the value bar (for "pick of the day" mode)
-            lean = b or pick(p, e["odds"], Rules(**{**rules.__dict__, "min_ev": -1.0}))
-            # more bet types: double chance, draw no bet, over/under (each with its own tested rules)
-            extra = [x for x in markets.extra_bets(e["odds"], e["sharp"], p, e.get("totals"), mp["over25"],
-                                                   rules.blend if e["sharp"] else 1.0)
-                     if x["outcome"] in MARKET_RULES and
+            # more bet types: double chance, draw no bet, over/under
+            allx = markets.extra_bets(e["odds"], e["sharp"], p, e.get("totals"), mp["over25"],
+                                      rules.blend if e["sharp"] else 1.0)
+            extra = [x for x in allx if x["outcome"] in MARKET_RULES and
                      MARKET_RULES[x["outcome"]][0] <= x["odds"] <= MARKET_RULES[x["outcome"]][1]]
-            for x in extra:
+            for x in extra:  # a market switched on as VALUE bets (none are by default: none beat the market)
                 if x["ev"] >= MARKET_RULES[x["outcome"]][2] and (b is None or x["ev"] > b["ev"]):
-                    b = lean = x
-                elif not b and lean is not None and x["ev"] > lean["ev"]:
-                    lean = x
-                elif not b and lean is None:
-                    lean = x
-            if extra:
+                    b = x
+            if allx:
                 scan.append("      more bets: " + ", ".join(
-                    f"{markets.label(x['outcome'], 'H', 'A')} {x['odds']:.2f} EV {x['ev']:+.1%}" for x in extra))
-            if lean and not b:
-                lean["stake_frac"] = cfg("LEAN_STAKE", 0.005)  # small flat stake, no edge to size on
-            if lean:
-                team = markets.short(lean["outcome"], e["home"], e["away"])
-                side = {"1X": "home", "dnb_home": "home", "X2": "away", "dnb_away": "away"}.get(
-                    lean["outcome"], lean["outcome"])
+                    f"{markets.label(x['outcome'], 'H', 'A')} {x['odds']:.2f} ({x['p']:.0%}) EV {x['ev']:+.1%}"
+                    for x in allx))
+
+            if POD_MODE == "likely":
+                # pick of the day = the most likely bet (win, double chance or draw no bet) where the model
+                # agrees with the market. 10-year test: ~80% hit rate, about break-even.
+                pool = [x for x in allx if x["outcome"] in POD_MARKETS]
+                for k, code in ((0, "home"), (2, "away")):
+                    if code in POD_MARKETS:
+                        o = float(e["odds"][k])
+                        pool.append({"outcome": code, "k": k, "odds": o, "p": float(p[k]), "implied": 1 / o,
+                                     "ev": float(p[k] * o - 1), "conf": float(p[k])})
+                pool = [x for x in pool if x["odds"] >= cfg("POD_MIN_ODDS", 1.2) and x["ev"] >= -0.02]
+                lean = max(pool, key=lambda x: x["p"]) if pool else None
+                if lean:
+                    lean = {**lean, "rank": lean["p"]}
+            else:  # best playable side even below the value bar
+                lean = pick(p, e["odds"], Rules(**{**rules.__dict__, "min_ev": -1.0}))
+                if lean:
+                    lean = {**lean, "rank": lean["ev"]}
+
+            def make_row(bet, tier):
+                code = bet["outcome"]
+                side = {"1X": "home", "dnb_home": "home", "X2": "away", "dnb_away": "away"}.get(code, code)
+                names_ = {h: e["home"], a: e["away"]}
                 if side in ("home", "away"):
-                    why = reasons.build(hist, model, h, a, side, {h: e["home"], a: e["away"]}, season_start)
+                    why = reasons.build(hist, model, h, a, side, names_, season_start)
                 elif side.startswith(("over", "under")):
-                    why = reasons.goals(hist, model, h, a, side, {h: e["home"], a: e["away"]}, season_start)
+                    why = reasons.goals(hist, model, h, a, side, names_, season_start)
                 else:
                     why = []
                 model_p = {"1X": mp["home"] + mp["draw"], "X2": mp["away"] + mp["draw"],
                            "dnb_home": mp["home"] / (1 - mp["draw"]), "dnb_away": mp["away"] / (1 - mp["draw"]),
-                           "over2.5": mp["over25"], "under2.5": 1 - mp["over25"]}.get(lean["outcome"])
-                book_name = (e["book_names"][lean["k"]] if lean["k"] >= 0 else
-                             (e["totals"]["books"][0 if lean["outcome"] == "over2.5" else 1] if e.get("totals") else ""))
-                if lean["outcome"] in ("1X", "X2", "dnb_home", "dnb_away"):
-                    book_name = f"{e['book_names'][lean['k']]} + {e['book_names'][1]}"
-                row = {**e, **lean, "league": lg, "league_name": name, "sport_key": sport,
-                       "hashtag": tag, "team": team, "model_p": model_p if model_p is not None else mp[lean["outcome"]],
-                       "final_p": lean["p"], "book": book_name, "why": why,
-                       "tier": "value" if b else "lean"}
-                (candidates if b else leans).append(row)
+                           "over2.5": mp["over25"], "under2.5": 1 - mp["over25"]}.get(code, mp.get(code))
+                if code in ("1X", "X2", "dnb_home", "dnb_away"):
+                    book_name = f"{e['book_names'][bet['k']]} + {e['book_names'][1]}"
+                elif code in ("over2.5", "under2.5"):
+                    book_name = e["totals"]["books"][0 if code == "over2.5" else 1]
+                else:
+                    book_name = e["book_names"][bet["k"]]
+                stake = bet.get("stake_frac", 0) if tier == "value" else cfg("LEAN_STAKE", 0.005)
+                return {**e, **bet, "stake_frac": stake, "league": lg, "league_name": name, "sport_key": sport,
+                        "hashtag": tag, "team": markets.short(code, e["home"], e["away"]), "model_p": model_p,
+                        "final_p": bet["p"], "book": book_name, "why": why, "tier": tier}
+
+            if b:
+                candidates.append(make_row(b, "value"))
+            elif lean:
+                leans.append(make_row(lean, "safe" if POD_MODE == "likely" else "lean"))
 
     today = pd.Timestamp(now.replace(tzinfo=None))
     season_start = pd.Timestamp(now.year if now.month >= 7 else now.year - 1, 7, 1)
@@ -326,7 +348,8 @@ def main():
             price("INT", c["key"], c["title"], intl.hashtag(c["key"]), events, hist, model, matcher,
                   cfg("INTL_MIN_MATCHES", 15), None, intl.neutral(c["key"]))
 
-    print(f"\nGames checked in the next {cfg('LOOKAHEAD_HOURS', 30)}h: {len(scan)}")
+    print(f"\nGames checked in the next {cfg('LOOKAHEAD_HOURS', 30)}h: "
+          f"{sum(1 for x in scan if not x.startswith('      '))}")
     for line in scan:
         print("  " + line)
     print(f"Rule: bet only if EV >= {rules.min_ev:+.0%}, odds {rules.min_odds}-{rules.max_odds}, no draws\n")
@@ -336,7 +359,7 @@ def main():
     picks = candidates[:left]
     # Daily mode: no value bet today -> still post the best game, clearly labelled
     if not picks and leans and cfg("DAILY_PICK", False) and posted_today == 0:
-        leans.sort(key=lambda c: c["ev"], reverse=True)
+        leans.sort(key=lambda c: c["rank"], reverse=True)
         picks = leans[:1]
         print(f"No value bet, daily mode: posting best game as Pick of the day "
               f"({picks[0]['team']} @ {picks[0]['odds']:.2f}, edge {picks[0]['ev']:+.1%})")

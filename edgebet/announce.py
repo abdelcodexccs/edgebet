@@ -102,8 +102,10 @@ def channel_pick(p: dict, why: list[str], league: str, kickoff_local: str) -> st
         ("💎 <b>VALUE PICK</b>" if p.get("tier", "value") == "value" else "📌 <b>PICK OF THE DAY</b>"),
         f"🎯 <b>{side} @ {p['odds']:.2f}</b>",
         f'📊 Bookmaker {_pct(p["implied"])} · Our model {_pct(p["final_p"])} · Edge {p["ev"] * 100:+.1f}%',
-        *([] if p.get("tier", "value") == "value" else
-          ["<i>Today's strongest game, below our +5% value bar: lower confidence, smaller stake.</i>"]),
+        *({"value": [],
+           "safe": [f"<i>Our most likely bet today ({_pct(p['final_p'])}): the model and the bookmakers agree. "
+                    "No big edge, so a small stake.</i>"]}.get(p.get("tier", "value"),
+          ["<i>Today's strongest game, below our +5% value bar: lower confidence, smaller stake.</i>"])),
         "",
         "<b>Why we like it</b>",
         *[f"• {_esc(w)}" for w in why],
