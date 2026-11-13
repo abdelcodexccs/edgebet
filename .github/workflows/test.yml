@@ -5,6 +5,11 @@ on:
       delete_after_minutes:
         description: "delete the test message after this many minutes (0 = keep it)"
         default: "10"
+      x_check:
+        description: "also check the X keys (reads your X account, posts nothing)"
+        default: "true"
+        type: choice
+        options: ["true", "false"]
 permissions:
   contents: write
 jobs:
@@ -42,6 +47,25 @@ jobs:
               data = urllib.parse.urlencode({"chat_id": chat, "message_id": mid}).encode()
               ok = json.load(urllib.request.urlopen(f"https://api.telegram.org/bot{token}/deleteMessage", data=data, timeout=20)).get("ok")
               print(f"::notice::Test message deleted: {ok}")
+          PY
+      - name: Check the X keys (no post)
+        if: github.event.inputs.x_check == 'true'
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+        run: |
+          python - <<'PY'
+          from edgebet import xpost
+          if not xpost.configured():
+              print("::warning::X keys not added yet (GitHub > Settings > Secrets > Actions: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)")
+          else:
+              try:
+                  u = xpost.me()
+                  print(f"::notice::X keys work: posting as @{u.get('username')} ({u.get('name')})")
+              except Exception as e:
+                  print(f"::error::X keys refused: {e}")
           PY
       - name: Save the new channel name
         if: always()

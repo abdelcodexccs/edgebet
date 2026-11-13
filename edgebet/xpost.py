@@ -93,3 +93,10 @@ def post(text: str, png: bytes | None = None) -> str:
     req = urllib.request.Request(TWEET_URL, data=json.dumps(payload).encode(), method="POST", headers={
         "Authorization": _auth("POST", TWEET_URL), "Content-Type": "application/json"})
     return str(_send(req)["data"]["id"])
+
+
+def me() -> dict:
+    """Check the keys without posting: returns the account they belong to."""
+    url = "https://api.x.com/2/users/me"
+    req = urllib.request.Request(url, headers={"Authorization": _auth("GET", url)})
+    return _send(req).get("data", {})
