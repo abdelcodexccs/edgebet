@@ -40,7 +40,8 @@ def predict_walk_forward(df: pd.DataFrame, start: str, train_years: float = 3.0,
             row = {"date": g.Date, "home_team": h, "away_team": a,
                    "fthg": g.FTHG, "ftag": g.FTAG, "result": RESULT_INDEX[g.FTR],
                    **{f"model_{o}": mp[o] for o in OUTCOMES},
-                   "xg_home": mp["xg_home"], "xg_away": mp["xg_away"]}
+                   "xg_home": mp["xg_home"], "xg_away": mp["xg_away"],
+                   "model_over25": mp["over25"], "model_btts": mp["btts"]}
             row.update({c: getattr(g, c) for c in odds_cols})
             rows.append(row)
         if progress and i % 20 == 0:

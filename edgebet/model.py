@@ -133,6 +133,9 @@ class DixonColes:
             "draw": float(np.trace(m)),
             "away": float(np.triu(m, 1).sum()),
             "over25": float(m[total > 2.5].sum()),
+            "over15": float(m[total > 1.5].sum()),
+            "over35": float(m[total > 3.5].sum()),
+            "btts": float(m[1:, 1:].sum()),
             "xg_home": lam,
             "xg_away": mu,
         }
