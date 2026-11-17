@@ -1,12 +1,4 @@
 {
- "30b32c194d8c2ae2bc5a209be5df44a9": {
-  "hs": 1,
-  "as": 0,
-  "n": 1,
-  "kickoff": "2026-11-14T19:45:00Z",
-  "espn": "401861170",
-  "slug": "uefa.nations"
- },
  "9cb05a2b01f14b556d7c79f7d060f2b9": {
   "hs": 4,
   "as": 1,
@@ -40,9 +32,9 @@
   "slug": "uefa.nations"
  },
  "e71a4a4fea03d00873c285c5b55a9864": {
-  "hs": 0,
-  "as": 0,
-  "n": 0,
+  "hs": 1,
+  "as": 1,
+  "n": 2,
   "kickoff": "2026-11-17T19:45:00Z",
   "espn": "401861193",
   "slug": "uefa.nations"
