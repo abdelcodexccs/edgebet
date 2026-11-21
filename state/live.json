@@ -22,5 +22,21 @@
   "kickoff": "2026-11-21T14:30:00Z",
   "espn": "401884734",
   "slug": null
+ },
+ "4d6dd3defbbe20fa24b719f9fcdbf280": {
+  "hs": 0,
+  "as": 1,
+  "n": 1,
+  "kickoff": "2026-11-21T19:45:00Z",
+  "espn": "401876396",
+  "slug": null
+ },
+ "13ac2151b9f6893cedb7f509e64eb070": {
+  "hs": 1,
+  "as": 1,
+  "n": 2,
+  "kickoff": "2026-11-21T19:45:00Z",
+  "espn": "401876403",
+  "slug": null
  }
 }
